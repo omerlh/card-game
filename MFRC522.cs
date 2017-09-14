@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Unosquare.RaspberryIO;
 using Unosquare.RaspberryIO.Gpio;
 
@@ -23,7 +24,7 @@ namespace cards_game
         private const byte PCD_RESETPHASE = 0x0F;
         private const byte PCD_CALCCRC    = 0x03;
 
-        public const byte PICC_REQIDL    = 0x26;
+        private const byte PICC_REQIDL    = 0x26;
         private const byte PICC_REQALL    = 0x52;
         private const byte PICC_ANTICOLL  = 0x93;
         private const byte PICC_SElECTTAG = 0x93;
@@ -37,9 +38,9 @@ namespace cards_game
         private const byte PICC_TRANSFER  = 0xB0;
         private const byte PICC_HALT      = 0x50;
 
-        public const byte MI_OK       = 0;
-        public const byte MI_NOTAGERR = 1;
-        public const byte MI_ERR      = 2;
+        private const byte MI_OK       = 0;
+        private const byte MI_NOTAGERR = 1;
+        private const byte MI_ERR      = 2;
 
         private const byte Reserved00     = 0x00;
         private const byte CommandReg     = 0x01;
@@ -130,44 +131,45 @@ namespace cards_game
             AntennaOn();
         }
 
-        public (int status, List<byte> backData) Anticoll()
+        public byte[] GetCardId()
         {
-            var serNumCheck = 0;
-            
-            var serNum = new List<byte>();
-        
             Write(BitFramingReg, 0x00);
             
-            serNum.Add(PICC_ANTICOLL);
-            serNum.Add(0x20);
-            
-            (var status, var backData,var backBits) = ToCard(PCD_TRANSCEIVE,serNum.ToArray());
+            (var status, var backData,var _) = ToCard(PCD_TRANSCEIVE,new [] {PICC_ANTICOLL, (byte)0x20});
             Console.WriteLine($"Anti {status}");
             if(status == MI_OK)
             {
-                var i = 0;
                 if (backData.Count == 5)
                 {
-                    while (i<4)
-                    {
-                        serNumCheck = serNumCheck ^ backData[i];
-                        i = i + 1;
-                    }
+                    var result = backData.Aggregate(0, (accumulate, current) => accumulate ^ current);
 
-                    if (serNumCheck != backData[i])
+                    if (result != 0)
                     {
-                        Console.WriteLine($"Oh No! {i}, {serNumCheck}, {backData[i]}");
-                        status = MI_ERR;
+                        Console.WriteLine($"Oh No!");
+                        throw new InvalidOperationException("Invalid card id returned");
                     }
+                }
+                else 
+                {
+                    throw new InvalidOperationException("Invalid card id returned");
                 }
             }
             else
-                status = MI_ERR;
-        
-            return (status,backData);
+                throw new InvalidOperationException("Reading card id failed");
+
+            Console.WriteLine($"count: {backData.Count}");
+
+            return backData.Take(4).ToArray();
         }
 
-        public (int status,int backLen) Request(byte reqMode)
+        public bool IsCardAvailable()
+        {
+            (var status,_) = Request(MFRC522.PICC_REQIDL);
+
+            return status == MI_OK;
+        }
+
+        private (int status,int backLen) Request(byte reqMode)
         {
             //status = None
             //backBits = None
@@ -215,9 +217,6 @@ namespace cards_game
 
         private (int status, List<byte> backData,int backLen) ToCard(byte command, byte[] sendData)
         {
-            var backData = new List<byte>();
-            var backLen = 0;
-            var status = MI_ERR;
             var irqEn = 0x00;
             var waitIRq = 0x00;
             var n = 0;
@@ -234,7 +233,7 @@ namespace cards_game
                     waitIRq = 0x30;
                     break;
                 default:
-                    throw new Exception();
+                    throw new ArgumentException($"command {command} not supported");
             }
             
             Write(CommIEnReg, (byte)(irqEn|0x80));
@@ -242,11 +241,10 @@ namespace cards_game
             SetBitMask(FIFOLevelReg, 0x80);
             
             Write(CommandReg, PCD_IDLE);  
-            
-            while(i<sendData.Length)
+
+            foreach(var data in sendData)
             {
-                Write(FIFODataReg, sendData[i]);
-                i = i+1;
+                Write(FIFODataReg, data);
             }
             
             Write(CommandReg, command);
@@ -259,50 +257,48 @@ namespace cards_game
             {
                 n = Read(CommIrqReg);
                 i = i - 1;
-                if (!((i!=0) && (~(n&0x01) == 1) && (~(n&waitIRq) == (byte)1)))
+                if (!((i!=0) && ((n & 0x01) == 0) && ((n & waitIRq) == (byte)0)))
                     break;
             }
             
             ClearBitMask(BitFramingReg, 0x80);
-        
-            if (i != 0)
-            {
-                if ((Read(ErrorReg) & 0x1B)==0x00)
-                {
-                    status = MI_OK;
 
-                    if ((n & irqEn & 0x01) == 1)
-                    {
-                        status = MI_NOTAGERR;
-                    }
+            var backData = new List<byte>();
+            var backLen = 0;
+
+            if (i == 0 ||  (Read(ErrorReg) & 0x1B) != 0x00)
+            {
+                return (MI_ERR,backData,backLen);
+            }
+
+            else if ((n & irqEn & 0x01) == 1)
+            {
+                return (MI_NOTAGERR,backData,backLen);
+            }
+        
+            else if (command == PCD_TRANSCEIVE)
+            {
+                n = Read(FIFOLevelReg);
+                var lastBits = (Read(ControlReg) & 0x07);
+                if (lastBits != 0)
+                    backLen = (n-1)*8 + lastBits;
+                else
+                    backLen = n*8;
                 
-                    if (command == PCD_TRANSCEIVE)
-                    {
-                        n = Read(FIFOLevelReg);
-                        var lastBits = (Read(ControlReg) & 0x07);
-                        if (lastBits != 0)
-                            backLen = (n-1)*8 + lastBits;
-                        else
-                            backLen = n*8;
-                        
-                        if (n == 0)
-                            n = 1;
-                        if (n > MAX_LEN)
-                            n = MAX_LEN;
-                    
-                        i = 0;
-                        while (i<n)
-                        {
-                            backData.Add(Read(FIFODataReg));
-                            i = i + 1;
-                        }
-                    }
+                if (n == 0)
+                    n = 1;
+                if (n > MAX_LEN)
+                    n = MAX_LEN;
+            
+                i = 0;
+                while (i<n)
+                {
+                    backData.Add(Read(FIFODataReg));
+                    i = i + 1;
                 }
             }
-            else
-                status = MI_ERR;
 
-            return (status,backData,backLen);
+            return (MI_OK, backData, backLen);
         }
 
         private void AntennaOff()

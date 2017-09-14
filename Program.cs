@@ -13,18 +13,15 @@ namespace cards_game
         {
             Console.WriteLine("Waiting for a card...");
             var reader = new MFRC522();
-            int status = MFRC522.MI_ERR;
-            do
-            {
-                (status,_) = reader.Request(MFRC522.PICC_REQIDL);
-                Console.WriteLine($"{status}");
-                Thread.Sleep(TimeSpan.FromSeconds(1));
-            }while(status != MFRC522.MI_OK);
-            
-            List<byte> data; 
-            (status, data) = reader.Anticoll();
 
-            Console.WriteLine($"{status} - {BitConverter.ToString(data.ToArray())}");
+            while (!reader.IsCardAvailable())
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(1));
+            }
+            
+            var id = BitConverter.ToString(reader.GetCardId());
+
+            Console.WriteLine($"card id: {id}");
         }
     }
 }
