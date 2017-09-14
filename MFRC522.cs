@@ -5,6 +5,7 @@ using Unosquare.RaspberryIO.Gpio;
 
 namespace cards_game
 {
+    //C# Fork of https://github.com/mxgxw/MFRC522-python
     public class MFRC522
     {
         private readonly SpiChannel _channel;
