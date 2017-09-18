@@ -17,7 +17,7 @@ main =
 
 echoServer : String
 echoServer =
-  "ws://192.168.1.103:8080"
+  "ws://<>:8080"
   
 defaultUrl: String
 defaultUrl = 
