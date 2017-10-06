@@ -1,10 +1,10 @@
--- Read more about this program in the official Elm guide:
--- https://guide.elm-lang.org/architecture/effects/web_sockets.html
-
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (..)
 import WebSocket
+import Http
+import Json.Decode as Decode
+import Array
+import Random
 
 main =
   Html.program
@@ -14,15 +14,21 @@ main =
     , subscriptions = subscriptions
     }
 
-
-echoServer : String
-echoServer =
+relayServerUrl : String
+relayServerUrl =
   "ws://<>:8080"
-  
-defaultUrl: String
-defaultUrl = 
-  "https://www.cesarsway.com/sites/newcesarsway/files/styles/large_article_preview/public/Common-dog-behaviors-explained.jpg?itok=FSzwbBoi"
 
+contentApiUrl : String
+contentApiUrl =
+  "http://localhost:5000"
+  
+loadCards: Cmd Msg
+loadCards = 
+    Http.send CardsLoaded (Http.get (contentApiUrl ++ "/api/v1/Content/animals-home") decodeStringArray)
+
+decodeStringArray : Decode.Decoder (Array.Array String)
+decodeStringArray =
+  Decode.array Decode.string
 
 -- MODEL
 
@@ -32,35 +38,46 @@ type alias Match =
   }
 
 type alias Model =
-  { currentCard: String,
-    currentMatch: Match,
-    isMatched: Bool
+  { currentMatch: Match
+    , isMatched: Bool
+    , currentGame: String
+    , cards: Array.Array String
   }
 
 
 init : (Model, Cmd Msg)
 init =
-  (Model "" (Match defaultUrl "F5-C7-84-1C") False, Cmd.none)
-
-
-
+  (Model (Match "" "") False "animals-home" Array.empty, loadCards)
 -- UPDATE
 
 
 type Msg
   = NewMessage String
+  | CardsLoaded (Result Http.Error (Array.Array String))
+  | SelectMatch Int
 
 
 update : Msg -> Model -> (Model, Cmd Msg)
-update msg {currentCard, currentMatch, isMatched}=
+update msg model=
   case msg of
     NewMessage str ->
       let 
         isMatch = 
-            str == currentMatch.cardId
+            str == model.currentMatch.cardId
       in
-        (Model str currentMatch isMatch, Cmd.none)
-
+        ( {model | isMatched = isMatch}, Cmd.none)
+    CardsLoaded (Ok res)  ->
+        ( {model | cards = res }, Random.generate SelectMatch (Random.int 0 (Array.length res - 1)))
+    CardsLoaded (Err _) ->
+        ( {model | currentMatch = (Match "" "") }, Cmd.none)
+    SelectMatch id ->
+        let 
+            currentCard: String
+            currentCard = Maybe.withDefault "not-found" (Array.get id model.cards)
+            getImageUrl = contentApiUrl ++ "/api/v1/Content/animals-home/" ++ currentCard
+            getCardId = Maybe.withDefault "not-found" (List.head (String.split "." currentCard))
+        in
+            ({model | currentMatch = (Match getImageUrl getCardId)}, Cmd.none)
 
 
 -- SUBSCRIPTIONS
@@ -68,7 +85,7 @@ update msg {currentCard, currentMatch, isMatched}=
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-  WebSocket.listen echoServer NewMessage
+  WebSocket.listen relayServerUrl NewMessage
 
 
 
@@ -79,7 +96,8 @@ view : Model -> Html Msg
 view model =
   div []
     [ 
-        img [src model.currentMatch.imageUrl] []
+        p [] [text (model.currentGame)]
+        , img [src model.currentMatch.imageUrl, height 100, width 100] []
         ,p [] [text (toString model.isMatched)]
     ]
 
